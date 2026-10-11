@@ -1444,11 +1444,13 @@ export const register: Register = (on, options) => {
       const isFlash = bright.has(BRANCH_ROW)
       const tone = t.flashTones[BRANCH_ROW] ?? 'teal'
       const label = b.head
+      const [added = 0, changed = 0, removed = 0] = t.counts[t.root] ?? []
+      const state = changed > 0 || (added > 0 && removed > 0) ? (GIT_COLOR.M ?? '#e5c07b') : added > 0 ? ADD_COLOR : removed > 0 ? DEL_COLOR : theme.fg || undefined
       return (
         <Box flexDirection="row" height={1} overflow="hidden">
           <Box flexDirection="row" flexShrink={0}>
             <Text color={isFlash ? (TONES[tone]?.solid ?? theme.accent) : theme.accent}>{(unicode ? BRANCH_ICON.plain : BRANCH_ICON.nerd) + ' '}</Text>
-            <Text bold color={isFlash ? (TONES[tone]?.solid ?? (theme.fg || undefined)) : theme.fg || undefined}>
+            <Text bold color={isFlash ? (TONES[tone]?.solid ?? state) : state}>
               {label}
             </Text>
             {b.ahead > 0 && <Text color={TONES.teal?.solid}>{` ↑${b.ahead}`}</Text>}
@@ -1560,8 +1562,10 @@ export const register: Register = (on, options) => {
             <Text> </Text>
           </Box>
         </Box>
+        <Text dimColor wrap="truncate-start">
+          {shortPath(t.root)}
+        </Text>
         {branchRow()}
-        {!t.top && <Text color={theme.muted}>{unicode ? '± ' : '\u{e702} '}no git repo · git status starts after git init</Text>}
         <Box flexDirection="row">
           <Box flexGrow={1}>
             <Input
