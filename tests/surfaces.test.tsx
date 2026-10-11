@@ -25,6 +25,7 @@ type World = {
 }
 type Ran = string[][]
 const opens: unknown[] = []
+const panes: string[] = []
 const envs: Record<string, string>[] = []
 
 function world(on: any, w: World, ran: Ran) {
@@ -35,8 +36,10 @@ function world(on: any, w: World, ran: Ran) {
   on('session.cwd', () => ({ value: w.cwd }))
   on('session.id', () => ({ value: 'test-session' }))
   on('command.register', () => ({ value: undefined }))
+  on('ui.panes', () => ({ value: panes.map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
   on('ui.open', (_$: any, e: any) => {
     opens.push(e)
+    if (!panes.includes(e.id)) panes.push(e.id)
     return { value: { isPlaced: true } }
   })
   on('ui.toast', (_$: any, e: any) => {
@@ -1046,3 +1049,52 @@ for (const os of ['linux', 'win32'] as const) {
     await ui.unmount()
   })
 }
+
+test('autoopen off: no pane at session start, the Files button above the prompt opens it (fullscreen only) and then hides', { timeoutMs: 20_000, options: { autoopen: 'off' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.txt', 'file']] }, status: '', numstat: '' }, ran)
+  panes.splice(0)
+  on('ui.close', (_$: any, e: any) => {
+    panes.splice(0, panes.length, ...panes.filter(id => id !== e.id))
+    return { value: undefined }
+  })
+  on('ui.render', () => ({ type: 'Box', props: {}, children: [] }) as any)
+  const before = opens.length
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(opens.length).toBe(before)
+  const bandProps = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 9 }, view: {} } as any
+  const narrow = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'AbovePrompt', requestId: 'above', props: bandProps, viewport: { columns: 80, rows: 40, isFullscreen: false } } as any)
+  await clock.settle()
+  await narrow.press({ key: 'files' })
+  await clock.settle()
+  expect(opens.length).toBe(before)
+  expect(ran.some(a => a[0] === 'toast' && (a[1] ?? '').includes('/tui fullscreen'))).toBe(true)
+  await narrow.unmount()
+  const band = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'AbovePrompt', requestId: 'above', props: bandProps, viewport: { columns: 200, rows: 40, isFullscreen: true } } as any)
+  await clock.settle()
+  expect(await band.find({ key: 'files' })).toBeDefined()
+  await band.press({ key: 'files' })
+  await clock.settle()
+  expect(opens.length).toBe(before + 1)
+  expect(opens.at(-1)).toMatchObject({ id: 'filetree', focus: true })
+  expect(await band.find({ key: 'files' })).toBeUndefined()
+  // the pane closing (here: the plugin's own close of an inline pane) brings the button back
+  const pane = await $.ui.mount({ plugin: 'filetree', surface: 'terminal', component: 'Pane', requestId: 'filetree', props: { ...paneProps(60), placement: 'inline' } })
+  await clock.settle()
+  expect(panes).not.toContain('filetree')
+  expect(await band.find({ key: 'files' })).toBeDefined()
+  await pane.unmount()
+  await band.unmount()
+})
+
+test('autoopen on (default): the pane opens at session start as before', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, { os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', dirs: { [root]: [['a.txt', 'file']] }, status: '', numstat: '' }, ran)
+  const before = opens.length
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(opens.length).toBe(before + 1)
+})

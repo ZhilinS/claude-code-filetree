@@ -90,6 +90,7 @@ let view = { from: 0, max: 0 }
 let nativeScroll = false
 let lastSync = 0
 let noDock = false
+let autoOpen = true
 let home = ''
 let platform: Promise<'linux' | 'darwin' | 'win32'> | null = null
 let dirty: { root: string; files: Record<string, Change> } = { root: '', files: {} }
@@ -265,6 +266,22 @@ function refreshGit($: EngineInterface): Promise<void> {
   return gitNext
 }
 
+async function showPane($: EngineInterface, title: string, focus = false): Promise<void> {
+  await $.ui.open(focus ? { id: PANE, title, focus: true } : { id: PANE, title })
+  $.ui.invalidate('ui.render') // the band above the prompt shows its Files button only while the pane is closed
+}
+
+async function paneUp($: EngineInterface): Promise<boolean> {
+  return (await $.ui.panes()).some(p => p.id === PANE)
+}
+
+// The sidebar needs the fullscreen layout and 110 columns; the desktop app docks it on its own.
+function layoutHint(terminal: boolean, isFullscreen: boolean | undefined, columns: number, then: string): string | null {
+  if (terminal && !isFullscreen) return `filetree shows in the sidebar, which needs the fullscreen layout. Run /tui fullscreen, then ${then}.`
+  if (terminal && columns < 110) return `filetree shows in the sidebar, which needs a terminal at least 110 columns wide. Widen it, then ${then}.`
+  return null
+}
+
 async function reset($: EngineInterface, root: string, focus = false): Promise<void> {
   const prev = await get($)
   generation += 1
@@ -276,8 +293,8 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   sizeQueue = []
   await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault }))
   const title = `Files: ${root.split('/').pop() || root}`
-  if (focus) await $.ui.open({ id: PANE, title, focus: true })
-  else if (!noDock) await $.ui.open({ id: PANE, title })
+  if (focus) await showPane($, title, true)
+  else if (!noDock && (autoOpen || (await paneUp($)))) await showPane($, title)
   await loadDirs($, [root])
   await detectRepo($)
   await refreshGit($)
@@ -1018,6 +1035,7 @@ export const register: Register = (on, options) => {
   followClaude = options?.follow !== 'off'
   sizeDefault = options?.column === 'size'
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
+  autoOpen = options?.autoopen !== 'off'
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'filetree', description: 'Show the file tree; args: [path] (no path = cwd)' })
     const windows = (await $.env.get('OS')) === 'Windows_NT'
@@ -1041,7 +1059,7 @@ export const register: Register = (on, options) => {
       await setActivities($, cur => cur.map(a => (a.state === 'running' ? { ...a, state: 'failed', label: `${a.kind} interrupted` } : a)))
       const cwd = await cwdOf($)
       if (!t.root || t.nodes.length === 0 || (follow && t.root !== cwd)) await reset($, cwd)
-      else if (!noDock) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })
+      else if (!noDock && autoOpen) await showPane($, `Files: ${t.root.split('/').pop() || t.root}`)
     })()
     return next(e)
   })
@@ -1050,8 +1068,8 @@ export const register: Register = (on, options) => {
     // The layout checks are the terminal's: the desktop app docks the pane itself and
     // reports no fullscreen layout, so a session no terminal draws skips them.
     const terminal = await $.session.surfaces().then(s => s.includes('terminal'), () => true)
-    if (terminal && !e.presentation.isFullscreen) return { text: 'filetree shows in the sidebar, which needs the fullscreen layout. Run /tui fullscreen, then /filetree.' }
-    if (terminal && e.presentation.columns < 110) return { text: 'filetree shows in the sidebar, which needs a terminal at least 110 columns wide. Widen it, then run /filetree.' }
+    const hint = layoutHint(terminal, e.presentation.isFullscreen, e.presentation.columns, 'run /filetree')
+    if (hint) return { text: hint }
     noDock = false
     const arg = (e.args ?? '').trim()
     const cwd = await cwdOf($)
@@ -1241,6 +1259,30 @@ export const register: Register = (on, options) => {
       })()
     }
     return next(context.length ? { ...e, context } : e)
+  })
+
+  on('ui.close', async ($, e, next) => {
+    const r = await next(e) // the close first: a hook beneath may keep the pane
+    if (e.id === PANE) $.ui.invalidate('ui.render')
+    return r
+  })
+
+  // A `Files` button above the prompt while the pane is closed: the same open as `/filetree` with no args.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)) return next(e)
+    const { Box, Button } = $.ui.resolve(e)
+    const open = async () => {
+      const hint = layoutHint(e.surface === 'terminal', e.viewport?.isFullscreen, e.viewport?.columns ?? 0, 'press Files')
+      if (hint) return $.ui.toast(hint)
+      noDock = false
+      follow = true
+      await reset($, await cwdOf($), true)
+    }
+    return (
+      <Box>
+        <Button key="files" plain dimColor label="Files" onPress={() => void open()} />
+      </Box>
+    )
   })
 
   on('prompt.attachment', async ($, e, next) => {
