@@ -1262,8 +1262,8 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.close', async ($, e, next) => {
-    const r = await next(e) // the close first: a hook beneath may keep the pane
-    if (e.id === PANE) $.ui.invalidate('ui.render')
+    const r = await next(e) // the close first: a hook beneath may keep the pane, then nothing changed
+    if (e.id === PANE && !(await paneUp($))) $.ui.invalidate('ui.render')
     return r
   })
 
